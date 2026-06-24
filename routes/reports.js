@@ -120,6 +120,45 @@ router.get('/excel-all-stores', requireLogin, requireAdmin, async (req, res) => 
   }
 });
 
+// GET /api/reports/all-stores-summary — SIRF ADMIN: dashboard pe har store ki aaj ki sale ek saath dikhane ke liye (JSON, Excel nahi)
+router.get('/all-stores-summary', requireLogin, requireAdmin, async (req, res) => {
+  const reportDate = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const storesResult = await pool.query('SELECT id, store_name, store_code, city FROM stores WHERE is_active = true ORDER BY store_name');
+    const stores = storesResult.rows;
+
+    const ordersResult = await pool.query(
+      `SELECT store_id, payment_mode, total_amount FROM orders WHERE order_date = $1`,
+      [reportDate]
+    );
+    const orders = ordersResult.rows;
+
+    const summary = stores.map(store => {
+      const storeOrders = orders.filter(o => o.store_id === store.id);
+      const totalSale = storeOrders.reduce((s, o) => s + parseFloat(o.total_amount), 0);
+      const byMode = {};
+      storeOrders.forEach(o => { byMode[o.payment_mode] = (byMode[o.payment_mode] || 0) + parseFloat(o.total_amount); });
+      return {
+        store_id: store.id,
+        store_name: store.store_name,
+        store_code: store.store_code,
+        city: store.city,
+        total_orders: storeOrders.length,
+        total_sale: totalSale,
+        by_payment_mode: byMode
+      };
+    });
+
+    const grandTotal = summary.reduce((s, x) => s + x.total_sale, 0);
+    const grandOrders = summary.reduce((s, x) => s + x.total_orders, 0);
+
+    res.json({ date: reportDate, stores: summary, grand_total_sale: grandTotal, grand_total_orders: grandOrders });
+  } catch (err) {
+    console.error('All stores summary error:', err);
+    res.status(500).json({ error: 'Summary load nahi ho paaya.' });
+  }
+});
+
 // Helper: ExcelJS workbook banata hai — overall summary sheet + per-store detail sheet(s)
 function buildWorkbook(title, reportDate, storeReports, includeOverallSummary = false) {
   const workbook = new ExcelJS.Workbook();
